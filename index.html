@@ -1,0 +1,1026 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能除濕桶監控中心 (AI+Firebase)</title>
+    <!-- 載入 Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 使用 Inter 字體 -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #fcfcfc; 
+        }
+        .humidity-gauge {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        /* 自訂選單樣式 */
+        select {
+            background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%23b45309' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+            background-position: right 0.5rem center;
+            background-repeat: no-repeat;
+            background-size: 1.5em 1.5em;
+            padding-right: 2.5rem;
+            appearance: none;
+        }
+        /* Modal 動畫 */
+        .modal-enter {
+            opacity: 0;
+            transform: scale(0.95);
+        }
+        .modal-enter-active {
+            opacity: 1;
+            transform: scale(1);
+            transition: opacity 200ms ease-out, transform 200ms ease-out;
+        }
+        .modal-exit {
+            opacity: 1;
+            transform: scale(1);
+        }
+        .modal-exit-active {
+            opacity: 0;
+            transform: scale(0.95);
+            transition: opacity 150ms ease-in, transform 150ms ease-in;
+        }
+    </style>
+</head>
+<body class="min-h-screen p-4 md:p-8">
+
+    <header class="mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div>
+            <h1 class="text-3xl font-extrabold text-amber-800 flex items-center gap-2">
+                <span class="text-4xl">💧</span> 智能除濕桶中控台
+            </h1>
+            <p id="user-id-display" class="text-xs text-gray-400 mt-1">使用者 ID: 載入中...</p>
+        </div>
+
+        <!-- NEW: 裝置選擇器 -->
+        <div class="flex items-center gap-2 bg-white p-2 rounded-xl shadow-sm border border-stone-200">
+            <label for="device-select" class="text-sm font-semibold text-gray-600 pl-2">選擇設備：</label>
+            <select id="device-select" class="bg-amber-50 border border-amber-200 text-amber-900 text-sm rounded-lg focus:ring-amber-500 focus:border-amber-500 block p-2.5 font-bold min-w-[150px]">
+                <option value="" disabled selected>載入中...</option>
+            </select>
+            <button id="add-device-btn" class="p-2.5 text-white bg-amber-600 hover:bg-amber-700 rounded-lg text-sm font-medium transition-colors" title="新增除濕桶">
+                + 新增
+            </button>
+        </div>
+    </header>
+
+    <!-- 主內容區 -->
+    <main class="grid grid-cols-1 lg:grid-cols-3 gap-6 relative">
+        
+        <!-- 載入遮罩 (切換裝置時顯示) -->
+        <div id="loading-overlay" class="absolute inset-0 bg-white/80 z-50 flex items-center justify-center rounded-xl backdrop-blur-sm hidden">
+            <div class="text-amber-800 font-bold text-xl animate-pulse">正在連線裝置...</div>
+        </div>
+
+        <!-- 左側：控制面板 & 排程設定 -->
+        <div id="left-column" class="space-y-6 order-1 lg:order-1">
+            
+            <!-- 1. 核心控制面板 -->
+            <div id="control-panel" class="bg-white p-6 rounded-xl shadow-xl border-t-4 border-amber-600">
+                <div class="flex justify-between items-center mb-4 border-b pb-2">
+                    <h2 class="text-2xl font-bold text-amber-900">核心控制</h2>
+                    <div class="flex items-center gap-2 bg-stone-50 px-3 py-1.5 rounded-lg border border-stone-200">
+                        <span id="current-device-name" class="text-sm font-bold text-stone-700">--</span>
+                        <button id="rename-device-btn" class="text-stone-400 hover:text-amber-600 transition-colors p-1" title="修改裝置名稱">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
+                              <path stroke-linecap="round" stroke-linejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="space-y-6">
+                    
+                    <!-- 狀態顯示 -->
+                    <div class="p-4 rounded-lg bg-gray-100 transition-colors duration-300" id="status-card">
+                        <p class="text-xs font-bold text-gray-500 uppercase tracking-wider">Status</p>
+                        <div class="flex items-center space-x-2 mt-1">
+                            <span id="device-status-indicator" class="w-3 h-3 rounded-full bg-gray-400 shadow-sm"></span>
+                            <span id="device-status-text" class="text-lg font-bold text-gray-700">離線</span>
+                        </div>
+                    </div>
+
+                    <!-- 目標濕度設定 -->
+                    <div>
+                        <label for="target-humidity" class="block text-sm font-medium text-gray-700 mb-2 flex justify-between">
+                            <span>目標濕度設定</span>
+                            <span class="text-amber-700 font-bold"><span id="target-humidity-value">55</span>%</span>
+                        </label>
+                        <input type="range" id="target-humidity" min="30" max="80" value="55" step="1" 
+                               class="w-full h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer accent-amber-600">
+                        <div class="flex justify-between text-xs text-gray-400 mt-1">
+                            <span>30% (乾燥)</span>
+                            <span>80% (潮濕)</span>
+                        </div>
+                    </div>
+
+                    <!-- 運行模式選擇 -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">運行模式</label>
+                        <div class="grid grid-cols-2 gap-3">
+                            <button data-mode="Auto" class="mode-btn px-4 py-3 bg-stone-200 text-stone-600 font-bold rounded-lg hover:bg-stone-300 transition duration-150 flex items-center justify-center gap-2">
+                                <span>🤖</span> 智能 (AI)
+                            </button>
+                            <button data-mode="Manual" class="mode-btn px-4 py-3 bg-stone-200 text-stone-600 font-bold rounded-lg hover:bg-stone-300 transition duration-150 flex items-center justify-center gap-2">
+                                <span>✋</span> 手動
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 啟動/停止按鈕 -->
+                    <button id="toggle-run-btn" 
+                            class="w-full py-4 text-xl font-bold text-white rounded-xl shadow-lg transition duration-300 transform hover:scale-[1.02] active:scale-95 bg-lime-600 hover:bg-lime-700 flex justify-center items-center gap-2">
+                        <span>🚀</span> 啟動除濕桶
+                    </button>
+                </div>
+            </div>
+
+            <!-- 2. 排程與定時 -->
+            <div class="bg-white p-6 rounded-xl shadow-xl">
+                <h2 class="text-lg font-bold mb-4 text-amber-900 border-b pb-2 flex items-center gap-2">
+                    <span>⏰</span> 排程設定
+                </h2>
+                <div class="space-y-4">
+                    <div class="flex justify-between items-center">
+                        <label class="text-gray-600 text-sm font-medium">開機時間</label>
+                        <div class="flex items-center space-x-2">
+                            <input type="time" id="schedule-start-time" class="border border-stone-300 rounded px-2 py-1 text-amber-800 text-sm bg-stone-50">
+                            <button id="set-start-schedule-btn" class="px-3 py-1 bg-stone-200 text-stone-600 rounded text-xs font-bold hover:bg-stone-300">儲存</button>
+                        </div>
+                    </div>
+                     <div class="flex justify-between items-center">
+                        <label class="text-gray-600 text-sm font-medium">關機時間</label>
+                        <div class="flex items-center space-x-2">
+                            <input type="time" id="schedule-stop-time" class="border border-stone-300 rounded px-2 py-1 text-amber-800 text-sm bg-stone-50">
+                            <button id="set-stop-schedule-btn" class="px-3 py-1 bg-stone-200 text-stone-600 rounded text-xs font-bold hover:bg-stone-300">儲存</button>
+                        </div>
+                    </div>
+                    <div class="pt-2 border-t border-dashed border-gray-200">
+                        <p id="current-schedule" class="text-xs text-gray-400 text-center">正在同步排程...</p>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- 中間：智能除濕桶雛形與數據圖表 -->
+        <div class="space-y-6 order-2 lg:order-2">
+
+            <!-- 1. 狀態總覽 -->
+            <div class="bg-white p-6 rounded-xl shadow-xl relative overflow-hidden">
+                <div class="absolute top-0 right-0 w-24 h-24 bg-amber-50 rounded-bl-full -z-0"></div>
+                <h2 class="text-2xl font-bold mb-4 text-amber-900 border-b pb-2 z-10 relative">裝置狀態監控</h2>
+                
+                <div class="humidity-gauge h-64 mb-6 p-2 relative">
+                    <!-- 濕度顯示圓盤 -->
+                    <canvas id="humidity-canvas" class="w-full h-full object-contain drop-shadow-md"></canvas>
+                    <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none mt-4">
+                        <p class="text-5xl font-black text-amber-800 tracking-tighter" id="current-humidity-display">--%</p>
+                        <p class="text-sm font-medium text-gray-400 mt-1">環境相對濕度</p>
+                    </div>
+                </div>
+
+                <!-- 2x2 感測器數據 -->
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-stone-50 p-4 rounded-xl border border-stone-100 text-center transition hover:shadow-md">
+                        <p class="text-xs text-gray-500 mb-1">💧 水箱水位</p>
+                        <p class="text-lg font-bold text-amber-600" id="water-level-display">--</p>
+                    </div>
+                    <div class="bg-stone-50 p-4 rounded-xl border border-stone-100 text-center transition hover:shadow-md">
+                        <p class="text-xs text-gray-500 mb-1">🧠 AI 決策</p>
+                        <p class="text-lg font-bold text-lime-700" id="ai-decision-display">--</p>
+                    </div>
+                    <div class="bg-stone-50 p-4 rounded-xl border border-stone-100 text-center transition hover:shadow-md">
+                        <p class="text-xs text-gray-500 mb-1">🌫️ PM2.5</p>
+                        <p class="text-lg font-bold text-amber-700" id="pm25-display">--</p>
+                    </div>
+                    <div class="bg-stone-50 p-4 rounded-xl border border-stone-100 text-center transition hover:shadow-md">
+                        <p class="text-xs text-gray-500 mb-1">🕸️ 濾網健康</p>
+                        <p class="text-lg font-bold text-amber-700" id="filter-life-display">--</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 2. 歷史數據趨勢 -->
+            <div class="bg-white p-6 rounded-xl shadow-xl">
+                <h2 class="text-lg font-bold mb-4 text-amber-900 border-b pb-2 flex justify-between items-center">
+                    <span>📈 24H 濕度趨勢</span>
+                    <span class="text-xs font-normal text-gray-400 bg-gray-100 px-2 py-1 rounded">模擬數據</span>
+                </h2>
+                <div class="h-40 flex items-end justify-between px-2 gap-1 pb-2 border-b border-l border-gray-300" id="trend-chart-placeholder">
+                    <!-- Javascript will generate bars here -->
+                </div>
+                <div class="flex justify-between text-xs text-gray-400 mt-2">
+                    <span>24h ago</span>
+                    <span>12h ago</span>
+                    <span>Now</span>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- 右側：濾網狀態 & 紀錄區 -->
+        <div class="space-y-6 order-3 lg:order-3">
+            
+             <!-- 1. 維護提醒 -->
+             <div class="bg-white p-6 rounded-xl shadow-xl">
+                <h2 class="text-lg font-bold mb-4 text-amber-900 border-b pb-2">🛠️ 維護與保養</h2>
+                
+                <div id="filter-status-alert" class="p-4 rounded-lg bg-stone-100 text-stone-600 mb-4 border-l-4 border-stone-400">
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="font-bold text-sm">濾網狀態</span>
+                        <span id="filter-life-text" class="text-xs bg-white px-2 py-0.5 rounded shadow-sm">良好</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2.5 mt-2">
+                        <div id="filter-progress-bar" class="bg-amber-600 h-2.5 rounded-full" style="width: 100%"></div>
+                    </div>
+                </div>
+
+                <button id="reset-filter-btn" 
+                        class="w-full py-2 text-sm font-semibold text-gray-600 bg-gray-100 rounded-lg border border-gray-300 hover:bg-white hover:text-amber-600 hover:border-amber-300 transition-all disabled:opacity-50">
+                    ↻ 更換濾網後重置
+                </button>
+            </div>
+
+            <!-- 2. 外部環境 -->
+            <div class="bg-gradient-to-br from-sky-50 to-white p-6 rounded-xl shadow-xl border border-sky-100">
+                <h2 class="text-lg font-bold mb-4 text-sky-900 border-b border-sky-200 pb-2">☁️ 外部天氣資訊</h2>
+                <div class="flex justify-between items-center mb-4">
+                    <div class="text-center">
+                        <p class="text-3xl font-bold text-sky-600" id="external-temp">--°C</p>
+                        <p class="text-xs text-sky-400">氣溫</p>
+                    </div>
+                    <div class="h-8 w-px bg-sky-200"></div>
+                    <div class="text-center">
+                        <p class="text-3xl font-bold text-blue-600" id="external-humidity">--%</p>
+                        <p class="text-xs text-blue-400">濕度</p>
+                    </div>
+                </div>
+                <div class="bg-white/60 p-3 rounded-lg text-center backdrop-blur-sm">
+                    <p class="text-sm font-medium text-sky-800" id="weather-forecast">載入中...</p>
+                </div>
+            </div>
+
+            <!-- 3. 裝置專屬紀錄 -->
+            <div class="bg-white p-6 rounded-xl shadow-xl flex-grow flex flex-col min-h-[300px]">
+                <h2 class="text-lg font-bold mb-4 text-amber-900 border-b pb-2 flex justify-between items-center">
+                    <span>📋 裝置日誌</span>
+                    <button id="clear-logs-btn" class="text-xs text-gray-400 hover:text-red-500">清除顯示</button>
+                </h2>
+                <div id="log-area" class="space-y-3 overflow-y-auto max-h-[400px] pr-2 flex-grow scrollbar-thin scrollbar-thumb-stone-300 scrollbar-track-stone-100">
+                    <!-- Logs go here -->
+                </div>
+            </div>
+            
+        </div>
+
+    </main>
+
+    <!-- 新增地點 Modal (預設隱藏) -->
+    <div id="add-device-modal" class="fixed inset-0 z-[60] hidden" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+        <!-- 背景遮罩 -->
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" id="modal-backdrop"></div>
+
+        <div class="fixed inset-0 z-10 overflow-y-auto">
+            <div class="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
+                <div class="relative transform overflow-hidden rounded-lg bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg">
+                    <div class="bg-white px-4 pb-4 pt-5 sm:p-6 sm:pb-4">
+                        <div class="sm:flex sm:items-start">
+                            <div class="mx-auto flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-amber-100 sm:mx-0 sm:h-10 sm:w-10">
+                                <svg class="h-6 w-6 text-amber-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                                </svg>
+                            </div>
+                            <div class="mt-3 text-center sm:ml-4 sm:mt-0 sm:text-left w-full">
+                                <h3 class="text-base font-semibold leading-6 text-gray-900" id="modal-title">新增除濕監控點</h3>
+                                <div class="mt-2">
+                                    <p class="text-sm text-gray-500 mb-4">請選擇一個地點或自行輸入名稱，我們將為該位置建立獨立的監控儀表板。</p>
+                                    
+                                    <!-- 快速選擇按鈕區 -->
+                                    <div class="grid grid-cols-3 gap-2 mb-4">
+                                        <button class="quick-add-btn py-2 px-3 bg-stone-100 hover:bg-amber-100 hover:text-amber-800 text-stone-600 rounded text-sm font-medium transition-colors border border-transparent hover:border-amber-200">客廳</button>
+                                        <button class="quick-add-btn py-2 px-3 bg-stone-100 hover:bg-amber-100 hover:text-amber-800 text-stone-600 rounded text-sm font-medium transition-colors border border-transparent hover:border-amber-200">主臥室</button>
+                                        <button class="quick-add-btn py-2 px-3 bg-stone-100 hover:bg-amber-100 hover:text-amber-800 text-stone-600 rounded text-sm font-medium transition-colors border border-transparent hover:border-amber-200">兒童房</button>
+                                        <button class="quick-add-btn py-2 px-3 bg-stone-100 hover:bg-amber-100 hover:text-amber-800 text-stone-600 rounded text-sm font-medium transition-colors border border-transparent hover:border-amber-200">浴室</button>
+                                        <button class="quick-add-btn py-2 px-3 bg-stone-100 hover:bg-amber-100 hover:text-amber-800 text-stone-600 rounded text-sm font-medium transition-colors border border-transparent hover:border-amber-200">地下室</button>
+                                        <button class="quick-add-btn py-2 px-3 bg-stone-100 hover:bg-amber-100 hover:text-amber-800 text-stone-600 rounded text-sm font-medium transition-colors border border-transparent hover:border-amber-200">書房</button>
+                                        <button class="quick-add-btn py-2 px-3 bg-stone-100 hover:bg-amber-100 hover:text-amber-800 text-stone-600 rounded text-sm font-medium transition-colors border border-transparent hover:border-amber-200">儲藏室</button>
+                                        <button class="quick-add-btn py-2 px-3 bg-stone-100 hover:bg-amber-100 hover:text-amber-800 text-stone-600 rounded text-sm font-medium transition-colors border border-transparent hover:border-amber-200">更衣間</button>
+                                        <button class="quick-add-btn py-2 px-3 bg-stone-100 hover:bg-amber-100 hover:text-amber-800 text-stone-600 rounded text-sm font-medium transition-colors border border-transparent hover:border-amber-200">陽台</button>
+                                    </div>
+
+                                    <div class="relative">
+                                        <div class="absolute inset-0 flex items-center" aria-hidden="true">
+                                          <div class="w-full border-t border-gray-300"></div>
+                                        </div>
+                                        <div class="relative flex justify-center">
+                                          <span class="bg-white px-2 text-xs text-gray-500">或自訂名稱</span>
+                                        </div>
+                                    </div>
+
+                                    <input type="text" id="new-device-name-input" placeholder="例如：貓咪房間..." 
+                                           class="mt-3 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-amber-600 sm:text-sm sm:leading-6">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-gray-50 px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6">
+                        <button type="button" id="confirm-add-device-btn" class="inline-flex w-full justify-center rounded-md bg-amber-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-amber-500 sm:ml-3 sm:w-auto">建立地點</button>
+                        <button type="button" id="cancel-add-device-btn" class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto">取消</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase 模組載入 -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, query, limit, orderBy, serverTimestamp, getDoc, updateDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Firebase 配置 ---
+        // 使用系統環境變數 __firebase_config (如果存在)，否則使用預設值
+        // 這是解決權限問題的關鍵 Fix
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "AIzaSyA2jROd4tGqCew067vn-GFitt5C3xVNsTU",
+            authDomain: "dehumidification-9ffcc.firebaseapp.com",
+            projectId: "dehumidification-9ffcc",
+            storageBucket: "dehumidification-9ffcc.firebasestorage.app",
+            messagingSenderId: "1052495538194",
+            appId: "1:1052495538194:web:8dcd0900994c55c24f10cb"
+        };
+        
+        // 取得當前環境的 App ID，解決 "Missing or insufficient permissions"
+        const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+        // --- 全域變數 ---
+        let app, db, auth;
+        let userId = null;
+        let currentDeviceId = null; // 當前選中的裝置 ID
+        let currentDeviceName = "";
+        let deviceListenerUnsubscribe = null;
+        let logsListenerUnsubscribe = null;
+        
+        // 用於模擬多裝置背景運行的暫存 (device_id -> status_object)
+        let backgroundDevicesCache = {}; 
+
+        // Canvas
+        const humidityCanvas = document.getElementById('humidity-canvas');
+        const ctx = humidityCanvas.getContext('2d');
+        const CANVAS_SIZE = 300; // 解析度提高
+
+        // UI 元素
+        const deviceSelect = document.getElementById('device-select');
+        const addDeviceBtn = document.getElementById('add-device-btn');
+        const renameDeviceBtn = document.getElementById('rename-device-btn');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const currentDeviceNameDisplay = document.getElementById('current-device-name');
+        
+        // Modal 元素
+        const addDeviceModal = document.getElementById('add-device-modal');
+        const confirmAddDeviceBtn = document.getElementById('confirm-add-device-btn');
+        const cancelAddDeviceBtn = document.getElementById('cancel-add-device-btn');
+        const newDeviceNameInput = document.getElementById('new-device-name-input');
+        const quickAddBtns = document.querySelectorAll('.quick-add-btn');
+
+        // 控制元件
+        const targetHumidityInput = document.getElementById('target-humidity');
+        const targetHumidityValue = document.getElementById('target-humidity-value');
+        const toggleRunBtn = document.getElementById('toggle-run-btn');
+        const modeButtons = document.querySelectorAll('.mode-btn');
+        
+        // 顯示元件
+        const deviceStatusIndicator = document.getElementById('device-status-indicator');
+        const deviceStatusText = document.getElementById('device-status-text');
+        const statusCard = document.getElementById('status-card');
+        const currentHumidityDisplay = document.getElementById('current-humidity-display');
+        const waterLevelDisplay = document.getElementById('water-level-display');
+        const aiDecisionDisplay = document.getElementById('ai-decision-display');
+        const pm25Display = document.getElementById('pm25-display');
+        const filterLifeDisplay = document.getElementById('filter-life-display');
+        const filterProgressBar = document.getElementById('filter-progress-bar');
+        const filterStatusAlert = document.getElementById('filter-status-alert');
+        const filterLifeText = document.getElementById('filter-life-text');
+        const resetFilterBtn = document.getElementById('reset-filter-btn');
+        const logArea = document.getElementById('log-area');
+        
+        // 排程 & 外部
+        const scheduleStartInput = document.getElementById('schedule-start-time');
+        const scheduleStopInput = document.getElementById('schedule-stop-time');
+        const currentScheduleDisplay = document.getElementById('current-schedule');
+        const setStartScheduleBtn = document.getElementById('set-start-schedule-btn');
+        const setStopScheduleBtn = document.getElementById('set-stop-schedule-btn');
+        const externalTempDisplay = document.getElementById('external-temp');
+        const externalHumidityDisplay = document.getElementById('external-humidity');
+        const weatherForecastDisplay = document.getElementById('weather-forecast');
+
+        // 預設裝置樣板
+        const DEFAULT_DEVICE_STATUS = {
+            targetHumidity: 55,
+            currentHumidity: 65,
+            waterLevel: 0.1,
+            mode: 'Auto',
+            isRunning: false,
+            aiDecision: '待命',
+            pm25Level: 20, 
+            filterLife: 100,
+            scheduleStart: '08:00',
+            scheduleStop: '22:00',
+            externalTemp: 28.0,
+            externalHumidity: 75,
+            name: "新除濕機"
+        };
+
+        // --- 初始化流程 ---
+        const initializeFirebase = async () => {
+            try {
+                const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken).catch(() => signInAnonymously(auth));
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        document.getElementById('user-id-display').textContent = `ID: ${userId.slice(0, 6)}...`;
+                        
+                        // 設定 Canvas
+                        const rect = humidityCanvas.getBoundingClientRect();
+                        humidityCanvas.width = CANVAS_SIZE;
+                        humidityCanvas.height = CANVAS_SIZE;
+
+                        // 1. 載入裝置列表
+                        await loadDeviceList();
+
+                        // 2. 啟動背景模擬 (更新所有裝置)
+                        startGlobalSimulation();
+
+                    } else {
+                        document.getElementById('user-id-display').textContent = '未登入';
+                    }
+                });
+            } catch (error) {
+                console.error("Init Error:", error);
+                alert("連線失敗，請重新整理");
+            }
+        };
+
+        // --- 裝置管理 ---
+        
+        // 取得裝置列表並填入選單
+        const loadDeviceList = async () => {
+            if (!userId) return;
+            // FIX: 使用動態 APP_ID
+            const devicesRef = collection(db, `artifacts/${APP_ID}/users/${userId}/devices`);
+            
+            try {
+                const snapshot = await getDocs(devicesRef);
+                deviceSelect.innerHTML = ''; // 清空選單
+
+                if (snapshot.empty) {
+                    // 如果沒有裝置，建立預設裝置
+                    await createNewDevice('living_room', '客廳');
+                    await createNewDevice('bedroom', '主臥室');
+                    await createNewDevice('basement', '地下室');
+                    // 重新載入
+                    await loadDeviceList();
+                    return;
+                }
+
+                // 填入選單
+                const devices = [];
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    devices.push({ id: doc.id, name: data.name || doc.id });
+                    // 快取背景數據
+                    backgroundDevicesCache[doc.id] = { ...DEFAULT_DEVICE_STATUS, ...data };
+                });
+
+                devices.forEach(dev => {
+                    const option = document.createElement('option');
+                    option.value = dev.id;
+                    option.textContent = dev.name;
+                    deviceSelect.appendChild(option);
+                });
+
+                // 預設選取第一個 (如果當前沒有選取)
+                if (devices.length > 0 && !currentDeviceId) {
+                    switchDevice(devices[0].id, devices[0].name);
+                } else if (currentDeviceId) {
+                     // 保持目前的選擇，但更新名稱
+                     const currentDev = devices.find(d => d.id === currentDeviceId);
+                     if (currentDev) {
+                        deviceSelect.value = currentDeviceId;
+                        currentDeviceNameDisplay.textContent = currentDev.name;
+                     }
+                }
+
+            } catch (e) {
+                console.error("Error loading devices:", e);
+                // alert("載入裝置失敗，請檢查網路或權限");
+            }
+        };
+
+        // 建立新裝置
+        const createNewDevice = async (id, name) => {
+            // FIX: 使用動態 APP_ID
+            const deviceRef = doc(db, `artifacts/${APP_ID}/users/${userId}/devices/${id}`);
+            await setDoc(deviceRef, {
+                ...DEFAULT_DEVICE_STATUS,
+                name: name,
+                createdAt: serverTimestamp()
+            });
+            return id;
+        };
+
+        // 切換監控的裝置
+        const switchDevice = (deviceId, deviceName) => {
+            if (currentDeviceId === deviceId) return;
+            
+            loadingOverlay.classList.remove('hidden');
+            currentDeviceId = deviceId;
+            currentDeviceName = deviceName || deviceId;
+            currentDeviceNameDisplay.textContent = currentDeviceName;
+            deviceSelect.value = deviceId;
+
+            // 取消舊的監聽
+            if (deviceListenerUnsubscribe) deviceListenerUnsubscribe();
+            if (logsListenerUnsubscribe) logsListenerUnsubscribe();
+
+            // 清空 Log
+            logArea.innerHTML = '';
+
+            // 1. 監聽該裝置的狀態
+            // FIX: 使用動態 APP_ID
+            const deviceRef = doc(db, `artifacts/${APP_ID}/users/${userId}/devices/${deviceId}`);
+            deviceListenerUnsubscribe = onSnapshot(deviceRef, (docSnap) => {
+                loadingOverlay.classList.add('hidden');
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    renderStatus(data);
+                    // 更新快取供模擬使用
+                    backgroundDevicesCache[deviceId] = { ...backgroundDevicesCache[deviceId], ...data };
+                }
+            });
+
+            // 2. 監聽 Log
+            // FIX: 使用動態 APP_ID
+            const logsRef = collection(db, `artifacts/${APP_ID}/users/${userId}/device_logs`);
+            
+            logsListenerUnsubscribe = onSnapshot(logsRef, (snapshot) => {
+                let allLogs = [];
+                snapshot.forEach(doc => {
+                    const log = doc.data();
+                    // 修正: 確保每條紀錄都有 timestamp，並在前端過濾裝置ID
+                    if (log.deviceId === currentDeviceId) {
+                         allLogs.push(log);
+                    }
+                });
+                
+                // 前端排序: 新的在前
+                allLogs.sort((a, b) => {
+                    const tA = a.timestamp ? a.timestamp.seconds : 0;
+                    const tB = b.timestamp ? b.timestamp.seconds : 0;
+                    return tB - tA;
+                });
+
+                // 取前 50 筆
+                renderLogs(allLogs.slice(0, 50));
+            }, (error) => console.error(error));
+        };
+
+        // --- Modal Logic ---
+        const openModal = () => {
+            addDeviceModal.classList.remove('hidden');
+            newDeviceNameInput.value = '';
+            newDeviceNameInput.focus();
+        };
+
+        const closeModal = () => {
+            addDeviceModal.classList.add('hidden');
+        };
+
+        const handleAddDevice = async (name) => {
+            if (!name || name.trim() === '') return;
+            const finalName = name.trim();
+            closeModal();
+            loadingOverlay.classList.remove('hidden'); // Show loading briefly
+            
+            const newId = `device_${Date.now()}`;
+            await createNewDevice(newId, finalName);
+            await loadDeviceList();
+            switchDevice(newId, finalName);
+            displayMessage('success', `已新增地點：${finalName}`);
+        };
+
+        // 新增裝置按鈕 (開啟 Modal)
+        addDeviceBtn.addEventListener('click', openModal);
+
+        // Modal 取消
+        cancelAddDeviceBtn.addEventListener('click', closeModal);
+        document.getElementById('modal-backdrop').addEventListener('click', closeModal);
+
+        // Modal 確認 (Input)
+        confirmAddDeviceBtn.addEventListener('click', () => {
+            handleAddDevice(newDeviceNameInput.value);
+        });
+
+        // 快速按鈕點擊
+        quickAddBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                handleAddDevice(btn.textContent);
+            });
+        });
+
+        // 修改裝置名稱按鈕事件
+        renameDeviceBtn.addEventListener('click', async () => {
+            if (!currentDeviceId) return;
+            
+            const newName = prompt("請輸入新的裝置名稱：", currentDeviceName);
+            
+            if (newName && newName.trim() !== "") {
+                const cleanName = newName.trim();
+                try {
+                    // 1. 更新 Firebase
+                    // FIX: 使用動態 APP_ID
+                    const deviceRef = doc(db, `artifacts/${APP_ID}/users/${userId}/devices/${currentDeviceId}`);
+                    await updateDoc(deviceRef, { name: cleanName });
+                    
+                    // 2. 更新本地變數
+                    currentDeviceName = cleanName;
+                    
+                    // 3. 更新 UI 顯示
+                    currentDeviceNameDisplay.textContent = cleanName;
+                    
+                    // 4. 更新下拉選單中的文字
+                    const option = deviceSelect.querySelector(`option[value="${currentDeviceId}"]`);
+                    if (option) option.textContent = cleanName;
+
+                    // 5. 紀錄 Log
+                    addLog(currentDeviceId, `裝置名稱已修改為: ${cleanName}`, 'info');
+                    displayMessage('success', '名稱修改成功');
+
+                } catch (e) {
+                    console.error("Rename failed", e);
+                    displayMessage('error', '修改失敗，請稍後再試');
+                }
+            }
+        });
+
+        // 裝置選單變更事件
+        deviceSelect.addEventListener('change', (e) => {
+            const selectedOption = e.target.options[e.target.selectedIndex];
+            switchDevice(e.target.value, selectedOption.textContent);
+        });
+
+        // --- 核心功能與渲染 ---
+
+        const updateCurrentDevice = async (updates) => {
+            if (!currentDeviceId) return;
+            // FIX: 使用動態 APP_ID
+            const deviceRef = doc(db, `artifacts/${APP_ID}/users/${userId}/devices/${currentDeviceId}`);
+            try {
+                await updateDoc(deviceRef, updates);
+            } catch (e) {
+                console.error("Update failed:", e);
+            }
+        };
+
+        const addLog = async (deviceId, message, type='info') => {
+             // FIX: 使用動態 APP_ID
+             const logsRef = collection(db, `artifacts/${APP_ID}/users/${userId}/device_logs`);
+             await setDoc(doc(logsRef), {
+                 deviceId: deviceId,
+                 message: message,
+                 type: type,
+                 timestamp: serverTimestamp()
+             });
+        };
+
+        // 渲染狀態
+        const renderStatus = (status) => {
+            // 按鈕與狀態卡片
+            const isRunning = status.isRunning;
+            const mode = status.mode || 'Manual';
+
+            // Start/Stop Button
+            if (isRunning) {
+                toggleRunBtn.innerHTML = `<span>🛑</span> 停止除濕 (${mode})`;
+                toggleRunBtn.className = "w-full py-4 text-xl font-bold text-white rounded-xl shadow-lg transition duration-300 transform hover:scale-[1.02] bg-red-600 hover:bg-red-700 flex justify-center items-center gap-2";
+                deviceStatusText.textContent = "運轉中";
+                deviceStatusText.className = "text-lg font-bold text-amber-600";
+                deviceStatusIndicator.className = "w-3 h-3 rounded-full bg-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.8)] animate-pulse";
+                statusCard.className = "p-4 rounded-lg bg-amber-50 border border-amber-200";
+            } else {
+                toggleRunBtn.innerHTML = `<span>🚀</span> 啟動除濕`;
+                toggleRunBtn.className = "w-full py-4 text-xl font-bold text-white rounded-xl shadow-lg transition duration-300 transform hover:scale-[1.02] bg-lime-600 hover:bg-lime-700 flex justify-center items-center gap-2";
+                deviceStatusText.textContent = "待機中";
+                deviceStatusText.className = "text-lg font-bold text-gray-500";
+                deviceStatusIndicator.className = "w-3 h-3 rounded-full bg-gray-300";
+                statusCard.className = "p-4 rounded-lg bg-gray-100 border border-transparent";
+            }
+
+            // Target Humidity
+            if (document.activeElement !== targetHumidityInput) {
+                targetHumidityInput.value = status.targetHumidity;
+            }
+            targetHumidityValue.textContent = status.targetHumidity;
+
+            // Mode Buttons
+            modeButtons.forEach(btn => {
+                if (btn.dataset.mode === mode) {
+                    btn.classList.remove('bg-stone-200', 'text-stone-600');
+                    btn.classList.add('bg-amber-600', 'text-white', 'shadow-md');
+                } else {
+                    btn.classList.add('bg-stone-200', 'text-stone-600');
+                    btn.classList.remove('bg-amber-600', 'text-white', 'shadow-md');
+                }
+            });
+
+            // Gauge & Data
+            currentHumidityDisplay.textContent = `${status.currentHumidity}%`;
+            drawGauge(status.currentHumidity, status.targetHumidity);
+
+            // Water Level
+            let waterText = '正常';
+            let waterColor = 'text-amber-600';
+            if (status.waterLevel > 0.8) {
+                waterText = '即將滿水';
+                waterColor = 'text-red-600 animate-pulse';
+            } else if (status.waterLevel > 0.5) {
+                waterText = '中水位';
+            }
+            waterLevelDisplay.textContent = waterText;
+            waterLevelDisplay.className = `text-lg font-bold ${waterColor}`;
+
+            // AI Decision
+            aiDecisionDisplay.textContent = isRunning ? status.aiDecision : '休眠';
+            
+            // PM2.5
+            pm25Display.textContent = `${status.pm25Level}`;
+            
+            // Filter
+            const life = Math.round(status.filterLife);
+            filterLifeDisplay.textContent = `${life}%`;
+            filterProgressBar.style.width = `${life}%`;
+            if (life < 20) {
+                filterProgressBar.className = "bg-red-500 h-2.5 rounded-full";
+                filterStatusAlert.className = "p-4 rounded-lg bg-red-50 text-red-800 mb-4 border-l-4 border-red-500";
+                filterLifeText.textContent = "需更換";
+                filterLifeText.className = "text-xs bg-red-200 text-red-800 px-2 py-0.5 rounded";
+                resetFilterBtn.disabled = false;
+            } else {
+                filterProgressBar.className = "bg-amber-600 h-2.5 rounded-full";
+                filterStatusAlert.className = "p-4 rounded-lg bg-stone-100 text-stone-600 mb-4 border-l-4 border-stone-400";
+                filterLifeText.textContent = "良好";
+                filterLifeText.className = "text-xs bg-white px-2 py-0.5 rounded shadow-sm";
+                resetFilterBtn.disabled = true;
+            }
+
+            // External & Schedule
+            externalTempDisplay.textContent = `${status.externalTemp.toFixed(1)}°C`;
+            externalHumidityDisplay.textContent = `${status.externalHumidity}%`;
+            scheduleStartInput.value = status.scheduleStart;
+            scheduleStopInput.value = status.scheduleStop;
+            currentScheduleDisplay.textContent = `同步完成：每日 ${status.scheduleStart} ~ ${status.scheduleStop}`;
+            weatherForecastDisplay.textContent = status.externalHumidity > 80 ? "🌧️ 戶外潮濕，建議關窗" : "⛅ 天氣舒適";
+
+            // Generate Trend Bars
+            generateTrendBars(status.currentHumidity);
+        };
+
+        const renderLogs = (logs) => {
+            logArea.innerHTML = '';
+            if (logs.length === 0) {
+                logArea.innerHTML = '<div class="text-center text-gray-400 text-sm py-4">尚無紀錄</div>';
+                return;
+            }
+            logs.forEach(log => {
+                const div = document.createElement('div');
+                const time = log.timestamp ? new Date(log.timestamp.seconds * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '--:--';
+                
+                let icon = 'ℹ️';
+                let bgClass = 'bg-stone-50 border-stone-200';
+                if (log.type === 'warning') { icon = '⚠️'; bgClass = 'bg-yellow-50 border-yellow-200 text-yellow-800'; }
+                if (log.type === 'ai') { icon = '🤖'; bgClass = 'bg-blue-50 border-blue-200 text-blue-800'; }
+                if (log.type === 'error') { icon = '❌'; bgClass = 'bg-red-50 border-red-200 text-red-800'; }
+
+                div.className = `p-2.5 rounded border text-sm flex gap-2 items-start ${bgClass}`;
+                div.innerHTML = `
+                    <span class="opacity-70 text-xs font-mono mt-0.5 whitespace-nowrap">${time}</span>
+                    <span class="flex-1">
+                        <span class="mr-1">${icon}</span> ${log.message}
+                    </span>
+                `;
+                logArea.appendChild(div);
+            });
+        };
+
+        // Canvas 繪圖
+        const drawGauge = (current, target) => {
+            const cx = CANVAS_SIZE / 2;
+            const cy = CANVAS_SIZE / 2;
+            const r = CANVAS_SIZE * 0.4;
+            
+            ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+            
+            // Draw Background Arc
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0.8 * Math.PI, 2.2 * Math.PI);
+            ctx.lineWidth = 25;
+            ctx.strokeStyle = '#f5f5f4'; // stone-100
+            ctx.lineCap = 'round';
+            ctx.stroke();
+
+            // Calculate Angle
+            const min = 30, max = 80;
+            const pct = Math.max(0, Math.min(1, (current - min) / (max - min)));
+            const angle = 0.8 * Math.PI + (1.4 * Math.PI * pct);
+
+            // Draw Value Arc
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0.8 * Math.PI, angle);
+            let color = '#d97706'; // amber-600
+            if (current > target + 10) color = '#dc2626'; // red
+            if (current < target - 10) color = '#f59e0b'; // amber-400
+            ctx.strokeStyle = color;
+            ctx.stroke();
+
+            // Draw Target Indicator
+            const targetPct = Math.max(0, Math.min(1, (target - min) / (max - min)));
+            const targetAngle = 0.8 * Math.PI + (1.4 * Math.PI * targetPct);
+            const tx = cx + r * Math.cos(targetAngle);
+            const ty = cy + r * Math.sin(targetAngle);
+            
+            ctx.beginPath();
+            ctx.arc(tx, ty, 8, 0, 2 * Math.PI);
+            ctx.fillStyle = '#4b5563';
+            ctx.fill();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#fff';
+            ctx.stroke();
+        };
+
+        const generateTrendBars = (current) => {
+            const container = document.getElementById('trend-chart-placeholder');
+            
+            // 修正: 確保初始化有東西
+            if (container.children.length === 0) {
+                // Initial random bars
+                for (let i = 0; i < 20; i++) {
+                    const h = Math.random() * 80 + 20;
+                    const bar = document.createElement('div');
+                    bar.className = "w-full bg-amber-200 rounded-t-sm opacity-60 hover:opacity-100 transition-all";
+                    bar.style.height = `${h}%`;
+                    container.appendChild(bar);
+                }
+            } else {
+                // 修正: 產生流動效果 (移除第一個，加入一個新的)
+                const bar = document.createElement('div');
+                bar.className = "w-full bg-amber-200 rounded-t-sm opacity-60 hover:opacity-100 transition-all";
+                // 新的高度基於當前濕度，稍微隨機波動
+                const h = Math.max(20, Math.min(100, current + (Math.random()*10 - 5)));
+                bar.style.height = `${h}%`;
+                
+                container.appendChild(bar);
+                
+                // 保持 bar 的數量在 20 個左右
+                if (container.children.length > 20) {
+                    container.removeChild(container.firstElementChild);
+                }
+            }
+        };
+
+        const displayMessage = (type, msg) => {
+            const box = document.createElement('div');
+            box.className = `fixed top-20 right-4 p-4 rounded shadow-lg text-white font-bold z-50 transform transition-all translate-x-10 ${type === 'error' ? 'bg-red-500' : 'bg-green-600'}`;
+            box.textContent = msg;
+            document.body.appendChild(box);
+            setTimeout(() => { box.classList.remove('translate-x-10'); }, 10);
+            setTimeout(() => { box.remove(); }, 3000);
+        };
+
+        // --- 全域背景模擬 (Global Simulation) ---
+        const startGlobalSimulation = () => {
+            setInterval(() => {
+                // 遍歷所有快取中的裝置
+                Object.keys(backgroundDevicesCache).forEach(async (devId) => {
+                    const status = backgroundDevicesCache[devId];
+                    if (!status) return;
+
+                    let updates = {};
+                    let shouldUpdate = false;
+
+                    // 1. 環境變數隨機波動 (溫度/外部濕度)
+                    if (Math.random() > 0.7) {
+                        updates.externalHumidity = Math.min(100, Math.max(40, status.externalHumidity + (Math.random() * 2 - 1)));
+                        shouldUpdate = true;
+                    }
+
+                    // 2. 如果機器在運轉中
+                    if (status.isRunning) {
+                        // 濕度下降 (模擬)
+                        const drop = (status.currentHumidity - status.targetHumidity) * 0.05 + Math.random() * 0.2;
+                        const newHum = Math.max(30, status.currentHumidity - (drop > 0 ? drop : -0.1)); // 稍微回升如果太低
+                        
+                        // 水位上升
+                        const newWater = Math.min(1.0, status.waterLevel + 0.005);
+                        
+                        // 濾網消耗
+                        const newFilter = Math.max(0, status.filterLife - 0.02);
+
+                        updates = { ...updates, currentHumidity: Math.round(newHum), waterLevel: newWater, filterLife: newFilter };
+                        shouldUpdate = true;
+
+                        // AI Log 觸發 (僅針對當前裝置顯示，避免 Log 爆炸，但在後台這應該寫入 DB)
+                        // 為省資源，我們只針對當前正在看的裝置寫入 Log
+                        if (devId === currentDeviceId) {
+                            if (newWater > 0.95 && status.waterLevel <= 0.95) {
+                                addLog(devId, `⚠️ 水箱即將滿水，請注意！`, 'warning');
+                            }
+                            if (status.mode === 'Auto' && newHum <= status.targetHumidity && status.currentHumidity > status.targetHumidity) {
+                                addLog(devId, `🤖 濕度達標，AI 進入低功耗模式`, 'ai');
+                            }
+                        }
+                    } else {
+                        // 沒開機，濕度會自然回升 (趨向外部濕度)
+                        if (status.currentHumidity < status.externalHumidity) {
+                            updates.currentHumidity = Math.round(status.currentHumidity + 0.1);
+                            shouldUpdate = true;
+                        }
+                    }
+
+                    if (shouldUpdate) {
+                        // 更新快取
+                        backgroundDevicesCache[devId] = { ...status, ...updates };
+                        
+                        // 寫入 Firebase (為了效能，不要每個裝置每次 tick 都寫，這裡每 5 秒寫一次，假設 simulation 頻率為 5秒)
+                        // 這裡簡化為直接寫入
+                        // FIX: 使用動態 APP_ID
+                        const devRef = doc(db, `artifacts/${APP_ID}/users/${userId}/devices/${devId}`);
+                        await updateDoc(devRef, updates);
+                    }
+                });
+
+            }, 5000); // 每 5 秒執行一次全域模擬
+        };
+
+        // --- 事件綁定 ---
+        toggleRunBtn.addEventListener('click', () => {
+            const newState = !backgroundDevicesCache[currentDeviceId]?.isRunning;
+            updateCurrentDevice({ isRunning: newState });
+            addLog(currentDeviceId, newState ? '手動啟動除濕' : '手動關閉電源', 'info');
+        });
+
+        targetHumidityInput.addEventListener('change', (e) => {
+            const val = parseInt(e.target.value);
+            updateCurrentDevice({ targetHumidity: val });
+            addLog(currentDeviceId, `目標濕度調整為 ${val}%`, 'info');
+        });
+        targetHumidityInput.addEventListener('input', (e) => targetHumidityValue.textContent = e.target.value);
+
+        modeButtons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const mode = btn.dataset.mode;
+                updateCurrentDevice({ mode: mode });
+                addLog(currentDeviceId, `切換至 ${mode === 'Auto' ? '智能' : '手動'} 模式`, 'info');
+            });
+        });
+
+        resetFilterBtn.addEventListener('click', () => {
+            updateCurrentDevice({ filterLife: 100 });
+            addLog(currentDeviceId, '濾網已重置', 'info');
+        });
+
+        document.getElementById('set-start-schedule-btn').addEventListener('click', () => {
+             updateCurrentDevice({ scheduleStart: scheduleStartInput.value });
+             alert("開機時間已儲存");
+        });
+        document.getElementById('set-stop-schedule-btn').addEventListener('click', () => {
+             updateCurrentDevice({ scheduleStop: scheduleStopInput.value });
+             alert("關機時間已儲存");
+        });
+        document.getElementById('clear-logs-btn').addEventListener('click', () => {
+            logArea.innerHTML = '';
+        });
+
+        window.onload = initializeFirebase;
+    </script>
+</body>
+</html>
